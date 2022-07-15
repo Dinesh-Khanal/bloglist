@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 const app = require("../app");
 const supertest = require("supertest");
 const Blog = require("../models/blog");
+const User = require("../models/user");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 const api = supertest(app);
 
@@ -19,13 +22,37 @@ const initialBlogs = [
     likes: 3,
   },
 ];
-
+let auth = {};
 beforeEach(async () => {
+  const passwordHash = await bcrypt.hash("secret", 1);
+  const testUser = {
+    username: "test",
+    name: "test user",
+    passwordHash,
+  };
   await Blog.deleteMany({});
-  let blog = new Blog(initialBlogs[0]);
-  await blog.save();
-  blog = new Blog(initialBlogs[1]);
-  await blog.save();
+  await User.deleteMany({});
+  let user = new User(testUser);
+  const savedUser = await user.save();
+  auth.user_id = savedUser.id;
+  auth.token = jwt.sign(
+    { username: "test", id: auth.user_id },
+    process.env.SECRET,
+    {
+      expiresIn: 60 * 60,
+    }
+  );
+
+  const blog = new Blog(initialBlogs[0]);
+  blog.user = auth.user_id;
+  const savedBlog = await blog.save();
+  user.blogs = user.blogs.concat(savedBlog._id);
+  await user.save();
+
+  const blog1 = new Blog(initialBlogs[1]);
+  blog1.user = auth.user_id;
+  const savedBlog1 = await blog1.save();
+  user.blogs = user.blogs.concat(savedBlog1._id);
 });
 test("blogs return in correct number in json", async () => {
   await api
@@ -52,6 +79,7 @@ test("A valid blog can be added", async () => {
   await api
     .post("/api/blogs")
     .send(newBlog)
+    .set("Authorization", `bearer ${auth.token}`)
     .expect(201)
     .expect("Content-Type", /application\/json/);
 
@@ -67,7 +95,10 @@ test("like property is not missing", async () => {
     url: "http://ramesh.blogspot.com",
     likes: 0,
   };
-  const request = await api.post("/api/blogs").send(newBlog);
+  const request = await api
+    .post("/api/blogs")
+    .send(newBlog)
+    .set("Authorization", `bearer ${auth.token}`);
   expect(request.body.likes).toBeDefined();
 });
 describe("title and url are not missing", () => {
@@ -77,7 +108,11 @@ describe("title and url are not missing", () => {
       url: "http://ramesh.blogspot.com",
       likes: 0,
     };
-    await api.post("/api/blogs").send(newBlog).expect(400);
+    await api
+      .post("/api/blogs")
+      .send(newBlog)
+      .set("Authorization", `bearer ${auth.token}`)
+      .expect(400);
   }, 100000);
   test("url missing", async () => {
     const newBlog = {
@@ -85,7 +120,11 @@ describe("title and url are not missing", () => {
       author: "Ramesh Mainali",
       likes: 0,
     };
-    await api.post("/api/blogs").send(newBlog).expect(400);
+    await api
+      .post("/api/blogs")
+      .send(newBlog)
+      .expect(400)
+      .set("Authorization", `bearer ${auth.token}`);
   }, 100000);
   test("title and url are not missing", async () => {
     const newBlog = {
@@ -94,7 +133,11 @@ describe("title and url are not missing", () => {
       url: "http://ramesh.blogspot.com",
       likes: 0,
     };
-    await api.post("/api/blogs").send(newBlog).expect(201);
+    await api
+      .post("/api/blogs")
+      .send(newBlog)
+      .set("Authorization", `bearer ${auth.token}`)
+      .expect(201);
   }, 100000);
 });
 
@@ -102,7 +145,9 @@ describe("Deleting and updating blog post", () => {
   test("Deleting single blog post", async () => {
     const blogsAtStart = await Blog.find();
     const blogToDelete = blogsAtStart[0];
-    await api.delete(`/api/blogs/${blogToDelete.id}`);
+    await api
+      .delete(`/api/blogs/${blogToDelete.id}`)
+      .set("Authorization", `bearer ${auth.token}`);
     expect(204);
     const blogsAtEnd = await Blog.find();
     expect(blogsAtEnd).toHaveLength(initialBlogs.length - 1);
